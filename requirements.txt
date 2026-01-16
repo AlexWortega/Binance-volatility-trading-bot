@@ -2,3 +2,9 @@ python-binance==0.7.9
 colorama==0.4.4
 PyYAML==5.4.1
 tradingview-ta==3.2.3
+
+# Additional dependencies for simple_bot module
+pandas>=1.3.0
+numpy>=1.20.0
+requests>=2.25.0
+matplotlib>=3.4.0
