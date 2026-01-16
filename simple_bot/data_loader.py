@@ -283,14 +283,14 @@ class DataLoader:
 
 def generate_sample_data(days: int = 365 * 4, interval_hours: int = 1) -> pd.DataFrame:
     """
-    Generate sample OHLCV data for testing when API is not available
+    Generate realistic BTC-like OHLCV data for testing when API is not available
 
     Args:
         days: Number of days of data
         interval_hours: Hours per candle
 
     Returns:
-        DataFrame with synthetic OHLCV data
+        DataFrame with synthetic OHLCV data resembling BTC price history
     """
     n_candles = (days * 24) // interval_hours
 
@@ -299,41 +299,84 @@ def generate_sample_data(days: int = 365 * 4, interval_hours: int = 1) -> pd.Dat
     start_date = end_date - timedelta(days=days)
     timestamps = pd.date_range(start=start_date, end=end_date, periods=n_candles)
 
-    # Generate realistic price movements using geometric Brownian motion
     np.random.seed(42)
 
-    # Initial price
-    initial_price = 30000.0
+    # Realistic BTC-like price simulation
+    # Starting around $40,000, ranging $15,000 - $100,000 over 4 years
 
-    # Parameters
-    mu = 0.0001  # Drift (small positive trend)
-    sigma = 0.02  # Volatility
+    initial_price = 40000.0
+    mean_price = 45000.0  # Mean reversion target
 
-    # Generate returns
-    returns = np.random.normal(mu, sigma, n_candles)
+    # Reduced hourly volatility (around 0.3% per hour = ~5% daily)
+    hourly_volatility = 0.003
 
-    # Add some trends and mean reversion
-    trend = np.sin(np.linspace(0, 8 * np.pi, n_candles)) * 0.001
-    returns = returns + trend
+    prices = np.zeros(n_candles)
+    prices[0] = initial_price
 
-    # Calculate prices
-    prices = initial_price * np.cumprod(1 + returns)
+    for i in range(1, n_candles):
+        # Mean reversion component
+        mean_reversion = 0.0001 * (mean_price - prices[i-1]) / prices[i-1]
 
-    # Generate OHLC from prices
-    open_prices = prices * (1 + np.random.uniform(-0.005, 0.005, n_candles))
-    high_prices = np.maximum(prices, open_prices) * (1 + np.abs(np.random.normal(0, 0.01, n_candles)))
-    low_prices = np.minimum(prices, open_prices) * (1 - np.abs(np.random.normal(0, 0.01, n_candles)))
-    close_prices = prices
+        # Random component
+        random_return = np.random.normal(0, hourly_volatility)
 
-    # Generate volume
-    base_volume = 1000
-    volume = base_volume * np.abs(np.random.normal(1, 0.5, n_candles)) * (1 + np.abs(returns) * 10)
+        # Long-term trend cycles (bull/bear markets)
+        cycle_position = i / n_candles
+        trend = 0.00002 * np.sin(cycle_position * 4 * np.pi)  # ~2 full cycles in 4 years
+
+        # Momentum factor (prices tend to continue in short term)
+        if i > 10:
+            recent_momentum = (prices[i-1] - prices[i-10]) / prices[i-10] * 0.001
+        else:
+            recent_momentum = 0
+
+        # Combined return
+        total_return = mean_reversion + random_return + trend + recent_momentum
+
+        # Calculate new price with bounds
+        prices[i] = prices[i-1] * (1 + total_return)
+
+        # Soft bounds to keep price in realistic range ($15k - $100k)
+        if prices[i] < 15000:
+            prices[i] = 15000 + np.random.uniform(0, 1000)
+        elif prices[i] > 100000:
+            prices[i] = 100000 - np.random.uniform(0, 5000)
+
+    # Generate OHLC from close prices
+    intrabar_volatility = 0.005  # 0.5% intrabar range
+
+    open_prices = np.zeros(n_candles)
+    high_prices = np.zeros(n_candles)
+    low_prices = np.zeros(n_candles)
+
+    open_prices[0] = prices[0] * (1 + np.random.uniform(-0.002, 0.002))
+
+    for i in range(1, n_candles):
+        # Open is close of previous candle with small gap
+        open_prices[i] = prices[i-1] * (1 + np.random.uniform(-0.001, 0.001))
+
+    for i in range(n_candles):
+        bar_range = prices[i] * intrabar_volatility * np.abs(np.random.normal(1, 0.3))
+
+        if prices[i] >= open_prices[i]:
+            # Bullish candle
+            low_prices[i] = min(open_prices[i], prices[i]) - bar_range * np.random.uniform(0.2, 0.8)
+            high_prices[i] = max(open_prices[i], prices[i]) + bar_range * np.random.uniform(0.1, 0.5)
+        else:
+            # Bearish candle
+            high_prices[i] = max(open_prices[i], prices[i]) + bar_range * np.random.uniform(0.2, 0.8)
+            low_prices[i] = min(open_prices[i], prices[i]) - bar_range * np.random.uniform(0.1, 0.5)
+
+    # Generate realistic volume (higher on big moves)
+    base_volume = 500  # BTC units
+    price_changes = np.abs(np.diff(prices, prepend=prices[0])) / prices
+    volume = base_volume * (1 + price_changes * 50) * np.abs(np.random.normal(1, 0.4, n_candles))
 
     df = pd.DataFrame({
         'open': open_prices,
         'high': high_prices,
         'low': low_prices,
-        'close': close_prices,
+        'close': prices,
         'volume': volume
     }, index=timestamps)
 
