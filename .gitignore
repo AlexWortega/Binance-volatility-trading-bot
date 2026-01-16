@@ -11,3 +11,10 @@ __*__
 
 # IDE settings
 .vscode
+
+# Generated files from simple_bot
+reports/
+data/
+plots/
+*.log
+bot_state_*.json
