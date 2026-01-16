@@ -284,6 +284,7 @@ class DataLoader:
 def generate_sample_data(days: int = 365 * 4, interval_hours: int = 1) -> pd.DataFrame:
     """
     Generate realistic BTC-like OHLCV data for testing when API is not available
+    Simulates real BTC price history: bull run -> crash -> recovery -> new highs
 
     Args:
         days: Number of days of data
@@ -301,46 +302,66 @@ def generate_sample_data(days: int = 365 * 4, interval_hours: int = 1) -> pd.Dat
 
     np.random.seed(42)
 
-    # Realistic BTC-like price simulation
-    # Starting around $40,000, ranging $15,000 - $100,000 over 4 years
-
-    initial_price = 40000.0
-    mean_price = 45000.0  # Mean reversion target
-
-    # Reduced hourly volatility (around 0.3% per hour = ~5% daily)
-    hourly_volatility = 0.003
+    # Simulate realistic BTC history:
+    # Year 1: Bull market $20k -> $65k
+    # Year 2: Bear market $65k -> $16k
+    # Year 3: Recovery $16k -> $45k
+    # Year 4: New bull $45k -> $95k
 
     prices = np.zeros(n_candles)
-    prices[0] = initial_price
+    prices[0] = 20000.0
+
+    # Define market phases
+    year_candles = n_candles // 4
 
     for i in range(1, n_candles):
-        # Mean reversion component
-        mean_reversion = 0.0001 * (mean_price - prices[i-1]) / prices[i-1]
+        year = i // year_candles
+        position_in_year = (i % year_candles) / year_candles
+
+        # Base hourly volatility
+        base_vol = 0.002
+
+        if year == 0:
+            # Year 1: Strong bull market
+            trend = 0.00015  # Strong uptrend
+            volatility = base_vol * (1 + position_in_year * 0.5)  # Increasing vol
+            target = 20000 + position_in_year * 45000  # 20k -> 65k
+        elif year == 1:
+            # Year 2: Bear market with capitulation
+            trend = -0.00012  # Downtrend
+            volatility = base_vol * (1.5 - position_in_year * 0.3)
+            target = 65000 - position_in_year * 49000  # 65k -> 16k
+        elif year == 2:
+            # Year 3: Accumulation and recovery
+            trend = 0.00008
+            volatility = base_vol * 0.8  # Lower vol, consolidation
+            target = 16000 + position_in_year * 29000  # 16k -> 45k
+        else:
+            # Year 4: New bull run
+            trend = 0.00012
+            volatility = base_vol * (1 + position_in_year * 0.8)
+            target = 45000 + position_in_year * 50000  # 45k -> 95k
+
+        # Mean reversion to target (prevents drift)
+        mean_reversion = 0.00005 * (target - prices[i-1]) / prices[i-1]
 
         # Random component
-        random_return = np.random.normal(0, hourly_volatility)
+        random_return = np.random.normal(0, volatility)
 
-        # Long-term trend cycles (bull/bear markets)
-        cycle_position = i / n_candles
-        trend = 0.00002 * np.sin(cycle_position * 4 * np.pi)  # ~2 full cycles in 4 years
-
-        # Momentum factor (prices tend to continue in short term)
-        if i > 10:
-            recent_momentum = (prices[i-1] - prices[i-10]) / prices[i-10] * 0.001
+        # Momentum (trend continuation)
+        if i > 24:
+            momentum = (prices[i-1] - prices[i-24]) / prices[i-24] * 0.002
         else:
-            recent_momentum = 0
+            momentum = 0
 
         # Combined return
-        total_return = mean_reversion + random_return + trend + recent_momentum
+        total_return = trend + mean_reversion + random_return + momentum * 0.3
 
-        # Calculate new price with bounds
+        # Apply return
         prices[i] = prices[i-1] * (1 + total_return)
 
-        # Soft bounds to keep price in realistic range ($15k - $100k)
-        if prices[i] < 15000:
-            prices[i] = 15000 + np.random.uniform(0, 1000)
-        elif prices[i] > 100000:
-            prices[i] = 100000 - np.random.uniform(0, 5000)
+        # Hard bounds
+        prices[i] = max(15000, min(100000, prices[i]))
 
     # Generate OHLC from close prices
     intrabar_volatility = 0.005  # 0.5% intrabar range

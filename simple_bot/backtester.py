@@ -64,7 +64,10 @@ class Backtester:
                  slippage: float = 0.0005,  # 0.05% slippage
                  position_size: float = 1.0,  # Full position
                  stop_loss: Optional[float] = None,  # e.g., 0.05 for 5%
-                 take_profit: Optional[float] = None):  # e.g., 0.10 for 10%
+                 take_profit: Optional[float] = None,  # e.g., 0.10 for 10%
+                 trailing_stop: Optional[float] = None,  # e.g., 0.03 for 3%
+                 use_atr_stops: bool = False,  # Use ATR-based stops
+                 atr_multiplier: float = 2.0):  # ATR multiplier for stops
         """
         Initialize backtester
 
@@ -75,6 +78,9 @@ class Backtester:
             position_size: Position size as fraction of capital (1.0 = 100%)
             stop_loss: Stop loss percentage (optional)
             take_profit: Take profit percentage (optional)
+            trailing_stop: Trailing stop percentage (optional)
+            use_atr_stops: Use ATR-based dynamic stops
+            atr_multiplier: Multiplier for ATR stops
         """
         self.initial_capital = initial_capital
         self.commission = commission
@@ -82,6 +88,9 @@ class Backtester:
         self.position_size = position_size
         self.stop_loss = stop_loss
         self.take_profit = take_profit
+        self.trailing_stop = trailing_stop
+        self.use_atr_stops = use_atr_stops
+        self.atr_multiplier = atr_multiplier
 
     def run(self, df: pd.DataFrame, strategy: BaseStrategy,
             symbol: str = "UNKNOWN") -> BacktestResult:
@@ -104,6 +113,8 @@ class Backtester:
         position = 0.0
         entry_price = 0.0
         entry_time = None
+        highest_price = 0.0  # For trailing stop
+        trailing_stop_price = 0.0
 
         trades: List[Trade] = []
         equity_curve = []
@@ -127,11 +138,37 @@ class Backtester:
                 'price': current_price
             })
 
-            # Check stop loss and take profit if in position
+            # Check stop loss, trailing stop, and take profit if in position
             if position > 0 and entry_price > 0:
                 price_change = (current_price - entry_price) / entry_price
 
-                # Stop loss hit
+                # Update trailing stop
+                if self.trailing_stop:
+                    if current_price > highest_price:
+                        highest_price = current_price
+                        trailing_stop_price = highest_price * (1 - self.trailing_stop)
+
+                    # Trailing stop hit
+                    if current_price <= trailing_stop_price and trailing_stop_price > 0:
+                        exit_price = trailing_stop_price * (1 - self.slippage)
+                        pnl = position * (exit_price - entry_price) - \
+                              (position * exit_price * self.commission)
+                        capital += pnl + (position * entry_price)
+
+                        trades[-1].exit_time = timestamp
+                        trades[-1].exit_price = exit_price
+                        trades[-1].pnl = pnl
+                        trades[-1].pnl_percent = (exit_price - entry_price) / entry_price * 100
+                        trades[-1].status = "closed"
+
+                        position = 0.0
+                        entry_price = 0.0
+                        entry_time = None
+                        highest_price = 0.0
+                        trailing_stop_price = 0.0
+                        continue
+
+                # Fixed stop loss hit
                 if self.stop_loss and price_change <= -self.stop_loss:
                     exit_price = entry_price * (1 - self.stop_loss) * (1 - self.slippage)
                     pnl = position * (exit_price - entry_price) - \
@@ -147,6 +184,8 @@ class Backtester:
                     position = 0.0
                     entry_price = 0.0
                     entry_time = None
+                    highest_price = 0.0
+                    trailing_stop_price = 0.0
                     continue
 
                 # Take profit hit
@@ -165,6 +204,8 @@ class Backtester:
                     position = 0.0
                     entry_price = 0.0
                     entry_time = None
+                    highest_price = 0.0
+                    trailing_stop_price = 0.0
                     continue
 
             # Process signals
@@ -175,6 +216,8 @@ class Backtester:
                 position = (available_capital / entry_price) * (1 - self.commission)
                 capital -= available_capital
                 entry_time = timestamp
+                highest_price = entry_price  # Initialize for trailing stop
+                trailing_stop_price = entry_price * (1 - (self.trailing_stop or 1.0))
 
                 trades.append(Trade(
                     entry_time=timestamp,
