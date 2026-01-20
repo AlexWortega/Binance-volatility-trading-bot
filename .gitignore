@@ -1,10 +1,12 @@
 creds.yml
 trades.txt
+.env
 
 __*__
 
-# Dont upload json files
+# Dont upload json files (except railway.json)
 *.json
+!railway.json
 
 # Virtual environment
 .venv
